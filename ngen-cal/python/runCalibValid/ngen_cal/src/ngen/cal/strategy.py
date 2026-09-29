@@ -30,6 +30,8 @@ class Objective(str, Enum):
                     "rmse": metric_functions.root_mean_squared_error,
                     "rsr": metric_functions.rmse_std_ratio,
                     "nnse": metric_functions. Weighted_NSE,
+                    "kge_flood_mean": metric_functions.kge_flood_mean,
+                    "kge_flood_max": metric_functions.kge_flood_max,
                 }
 
     kge = "kge"
@@ -37,6 +39,8 @@ class Objective(str, Enum):
     nnse = "nnse"
     rmse = "rmse"
     rsr = "rsr"
+    kge_flood_mean = "kge_flood_mean"
+    kge_flood_max = "kge_flood_max"
 
     def __call__(self, *args, **kwargs):
         return self.__func_map__[self.value](*args, **kwargs)
