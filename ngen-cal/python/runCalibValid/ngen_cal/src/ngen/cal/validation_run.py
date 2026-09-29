@@ -44,7 +44,8 @@ def run_valid_ctrl_best(agent: 'Agent') -> None:
                            'full': calibration_object.full_evaluation_range}
             metrics = pd.DataFrame()
             for key, value in time_period.items():
-                result = _calc_metrics(calibration_object.output, calibration_object.observed, value, calibration_object.threshold)
+                result = _calc_metrics(calibration_object.output, calibration_object.observed, value, calibration_object.threshold,
+                                       calibration_object.objective_params)
                 tmp = {**{'run': agent.run_name, 'period': key}, **result}
                 metrics = pd.concat([metrics, pd.DataFrame([tmp])], ignore_index=True)
                 calibration_object.write_valid_metric_file(agent.workdir, agent.run_name, metrics)

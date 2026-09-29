@@ -256,6 +256,11 @@ class Evaluatable(ABC):
         return self.eval_params.threshold
 
     @property
+    def objective_params(self):
+        """The flood objectives' flood list and weight, when the objective uses them"""
+        return self.eval_params.objective_params
+
+    @property
     def user(self) -> str:
         """User's email address to receieve run complete message"""
         return self.eval_params.user

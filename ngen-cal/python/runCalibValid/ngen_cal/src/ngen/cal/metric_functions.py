@@ -3,6 +3,7 @@ This module contains functions to process model output and compute statistical m
 @author: Xia Feng
 """
 
+import functools
 import math
 from typing import Union, Optional, Dict
 import warnings
@@ -25,6 +26,9 @@ __all__ = ['treat_values',
            'KGE',
            'categorical_score',
            'pbias_fdc',
+           'read_floods',
+           'flood_peak_errors',
+           'kge_flood_mean',
           ]
 
 
@@ -508,3 +512,43 @@ def calculate_all_metrics(
         else:
              result.update({metric_name[f.__name__]: f(y_true, y_pred)})
     return result
+
+
+FLOOD_WINDOW = pd.Timedelta(days=7)
+
+
+@functools.lru_cache(maxsize=None)
+def read_floods(path: str) -> pd.DataFrame:
+    """The flood list beside the observed flow: each flood's observed peak hour and peak (m³/s)."""
+    return pd.read_csv(path, parse_dates=['peak_time'])
+
+
+def flood_peak_errors(y_pred: pd.Series, floods: pd.DataFrame) -> np.ndarray:
+    """Peak error |Q̂ − Q| / Q of each listed flood: Q the list's observed peak, Q̂ the largest
+    simulated flow within seven days either side of the observed peak hour, the window cut to
+    the simulation's span. Raises when the simulation lacks an hour of a window, so that no
+    flood drops out of the score unseen.
+
+    Parameters
+    ----------
+    y_pred : Modeled values on an hourly DatetimeIndex, not filtered by the observations
+    floods : peak_time and obs_peak_cms of each flood
+
+    Returns
+    ----------
+    One peak error per flood
+    """
+    errors = []
+    for t, q in zip(floods['peak_time'], floods['obs_peak_cms']):
+        start = max(t - FLOOD_WINDOW, y_pred.index[0])
+        end = min(t + FLOOD_WINDOW, y_pred.index[-1])
+        window = y_pred.reindex(pd.date_range(start, end, freq='h'))
+        if window.isna().any():
+            raise ValueError(f"the simulation lacks hours of the flood window around {t}")
+        errors.append(abs(float(window.max()) - q) / q)
+    return np.array(errors, dtype=float)
+
+
+def kge_flood_mean(kge: float, errors: np.ndarray, weight: float) -> float:
+    """1 − [(1 − w)(1 − KGE) + w·mean peak error], so the search minimizes the loss."""
+    return 1.0 - ((1.0 - weight) * (1.0 - kge) + weight * float(np.mean(errors)))

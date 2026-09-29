@@ -14,7 +14,7 @@ from pathlib import Path
 import shutil
 import time
 
-from typing import Optional, Tuple, Union
+from typing import Any, Mapping, Optional, Tuple, Union
 try: #to get literal in python 3.7, it was added to typing in 3.8
     from typing import Literal
 except ImportError:
@@ -76,6 +76,7 @@ class EvaluationOptions(BaseModel):
     id: Optional[str]
     basinID: Optional[str]
     threshold: Optional[float] 
+    objective_params: Optional[Mapping[str, Any]] = None
     site_name: Optional[str] 
     streamflow_name: Optional[str] = 'sim_flow'
     save_output_iteration: Optional[bool] = False

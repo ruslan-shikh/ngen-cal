@@ -12,7 +12,7 @@ import os
 import subprocess
 import threading
 from datetime import datetime
-from typing import Dict, Optional, Tuple, TYPE_CHECKING
+from typing import Any, Dict, Optional, Tuple, TYPE_CHECKING
 
 import numpy as np # type: ignore
 import pandas as pd # type: ignore
@@ -20,7 +20,8 @@ import pandas as pd # type: ignore
 import logging
 
 from .gwo_global_best import GlobalBestGWO
-from .metric_functions import treat_values, calculate_all_metrics
+from .metric_functions import (treat_values, calculate_all_metrics, read_floods, flood_peak_errors,
+                               kge_flood_mean)
 from .plot_output import plot_calib_output, plot_cost_func
 from .utils import pushd, complete_msg, LiveLogPanel
 
@@ -70,6 +71,7 @@ def _calc_metrics(
     observed_hydrograph: pd.Series,
     eval_range: Tuple[datetime, datetime] = None,
     threshold: Optional[float] = None,
+    objective_params: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, float]:
     """Calculate statistical metrics.
 
@@ -79,6 +81,10 @@ def _calc_metrics(
     observed_hydrograph : Time series of observed streamflow
     eval_range : Evaluation time period for calibration run
     threshold : Streamflow threshold for calculating categorical scores
+    objective_params : The flood objectives' flood list (a CSV of peak_time and obs_peak_cms) under
+        'floods' and the weight of the peak error under 'flood_weight'; with a list, the metrics
+        gain FLOOD_MEAN_PEAK_ERR, FLOOD_MAX_PEAK_ERR and KGE_FLOOD_MEAN over the
+        listed floods that peak in eval_range
 
     Returns
     ----------
@@ -96,7 +102,25 @@ def _calc_metrics(
     obsflow = df['obs_flow']
     simflow = df['sim_flow']
 
-    return calculate_all_metrics(obsflow, simflow, threshold)
+    metrics = calculate_all_metrics(obsflow, simflow, threshold)
+    if objective_params and objective_params.get('floods'):
+        floods = read_floods(str(objective_params['floods']))
+        if eval_range:
+            floods = floods[(floods['peak_time'] >= eval_range[0])
+                            & (floods['peak_time'] <= eval_range[1])]
+        nan = float('nan')
+        metrics.update({'FLOOD_MEAN_PEAK_ERR': nan, 'FLOOD_MAX_PEAK_ERR': nan,
+                        'KGE_FLOOD_MEAN': nan})
+        if len(floods):
+            # the raw simulation: the observation-filtered series drops the hours a gauge
+            # missed, and a window's simulated peak may sit in one of them; the engine's
+            # output is a one-column sim_flow frame, taken here as a series
+            errors = flood_peak_errors(pd.DataFrame(simulated_hydrograph)['sim_flow'], floods)
+            weight = float(objective_params['flood_weight'])
+            metrics.update({'FLOOD_MEAN_PEAK_ERR': float(np.mean(errors)),
+                            'FLOOD_MAX_PEAK_ERR': float(np.max(errors)),
+                            'KGE_FLOOD_MEAN': kge_flood_mean(metrics['KGE'], errors, weight)})
+    return metrics
 
 def _evaluate(i: int, calibration_object: 'Evaluatable', agent: 'Agent', info: bool=False) -> float:
     """ Calculate objective function and evaluation metrics.
@@ -115,7 +139,8 @@ def _evaluate(i: int, calibration_object: 'Evaluatable', agent: 'Agent', info: b
 
     """
     # Calculate objective function and metrics
-    metrics = _calc_metrics(calibration_object.output, calibration_object.observed, calibration_object.evaluation_range, calibration_object.threshold)
+    metrics = _calc_metrics(calibration_object.output, calibration_object.observed, calibration_object.evaluation_range, calibration_object.threshold,
+                            calibration_object.objective_params)
     metric_objective_function = metrics[calibration_object.objective.value.upper()]
     score = 1 - metric_objective_function if calibration_object.target == 'min' else metric_objective_function
 
