@@ -1,9 +1,11 @@
-"""The storm objective runs the model under changed forcings beside the unchanged one, and scores
-each listed flood by the log of its simulated peak over its observed one, averaged over the runs.
+"""The storm objectives run the model under changed forcings beside the unchanged one. They score
+each listed flood by the log of its simulated peak over its observed one, averaged over the runs
+or taken at the flood's worst run, and the record by the lowest KGE among the runs.
 
 Each case fails against a term that leaves a run out, takes the relative error in place of the
-log ratio, scores a validation run that has no changed runs, starts a changed run on the
-unchanged forcing or in the worker's own directory, or lets a failed changed run pass.
+log ratio, averages where the worst run is asked for or takes one run as worst for every flood,
+scores a validation run that has no changed runs, starts a changed run on the unchanged forcing
+or in the worker's own directory, or lets a failed changed run pass.
 """
 import json
 import subprocess
@@ -87,12 +89,63 @@ def test_a_flood_objective_without_storm_forcings_is_unchanged(tmp_path):
     obs = hydrograph(500, 21.0, "obs_flow")
     p = params(tmp_path, (500, 21.0))
     del p["storm_forcings"]
-    assert "KGE_FLOOD_STORM_MEAN" not in _calc_metrics(hydrograph(500, 21.0), obs,
-                                                       objective_params=p)
+    m = _calc_metrics(hydrograph(500, 21.0), obs, objective_params=p)
+    assert not {"KGE_FLOOD_STORM_MEAN", "KGE_FLOOD_STORM_WORST", "KGE_STORM_WORST"} & set(m)
 
 
-def test_the_storm_objective_is_one_the_engine_accepts():
-    assert Objective("kge_flood_storm_mean").value.upper() == "KGE_FLOOD_STORM_MEAN"
+def both(*parts: pd.Series) -> pd.Series:
+    """One hydrograph holding the peak of each part."""
+    return pd.concat(parts, axis=1).max(axis=1).rename(parts[0].name)
+
+
+def test_the_worst_storm_term_takes_each_floods_largest_log_error_among_the_runs(tmp_path):
+    obs = both(hydrograph(500, 21.0, "obs_flow"), hydrograph(1500, 4.0, "obs_flow"))
+    p = params(tmp_path, (500, 21.0), (1500, 4.0))
+    unchanged = both(hydrograph(500, 21.0), hydrograph(1500, 4.0))
+    dry = both(hydrograph(500, 10.5), hydrograph(1500, 4.0))       # halves the first flood only
+    wet = both(hydrograph(500, 21.0), hydrograph(1500, 16.0))      # quadruples the second only
+    m = _calc_metrics(unchanged, obs, objective_params=p, storm_hydrographs=[dry, wet])
+    # the first flood is worst in the dry run and the second in the wet one: the mean of the
+    # runs reads (ln 2 + ln 4) / 6, and the one run that is worst over both floods ln 4 / 2
+    worst = (np.log(2) + np.log(4)) / 2
+    assert m["FLOOD_STORM_WORST_LOG_ERR"] == pytest.approx(worst)
+    assert m["KGE_FLOOD_STORM_WORST"] == pytest.approx(1 - (0.5 * (1 - m["KGE"]) + 0.5 * worst))
+    assert m["FLOOD_STORM_LOG_ERR"] == pytest.approx((np.log(2) + np.log(4)) / 6)
+
+
+def test_the_worst_storm_kge_is_the_lowest_kge_among_the_runs():
+    obs = hydrograph(500, 21.0, "obs_flow")
+    unchanged, dry, wet = hydrograph(500, 21.0), hydrograph(500, 10.5), hydrograph(500, 42.0)
+    alone = [_calc_metrics(run, obs)["KGE"] for run in (unchanged, dry, wet)]
+    assert alone[0] == pytest.approx(1.0) and min(alone) < 0.9
+    # no flood list: the record's score needs only the changed runs
+    m = _calc_metrics(unchanged, obs, objective_params={"storm_forcings": ["dry.nc", "wet.nc"]},
+                      storm_hydrographs=[dry.to_frame(), wet.to_frame()])
+    assert m["KGE_STORM_WORST"] == pytest.approx(min(alone))
+    assert m["KGE"] == pytest.approx(1.0)                           # the unchanged run's, as before
+
+
+def test_a_run_without_its_changed_runs_carries_no_worst_storm_scores(tmp_path):
+    obs = hydrograph(500, 21.0, "obs_flow")
+    m = _calc_metrics(hydrograph(500, 21.0), obs, objective_params=params(tmp_path, (500, 21.0)))
+    assert np.isnan(m["FLOOD_STORM_WORST_LOG_ERR"]) and np.isnan(m["KGE_FLOOD_STORM_WORST"])
+    assert np.isnan(m["KGE_STORM_WORST"])
+
+
+def test_the_log_flood_term_reads_the_unchanged_runs_peaks_by_their_log_ratio(tmp_path):
+    obs = hydrograph(500, 21.0, "obs_flow")
+    m = _calc_metrics(hydrograph(500, 10.5), obs,
+                      objective_params=params(tmp_path, (500, 21.0), storms=()))
+    # a halved peak: ln 2, where the relative error reads 0.5
+    assert m["FLOOD_MEAN_LOG_ERR"] == pytest.approx(np.log(2))
+    assert m["FLOOD_MEAN_PEAK_ERR"] == pytest.approx(0.5)
+    assert m["KGE_FLOOD_LOG_MEAN"] == pytest.approx(1 - (0.5 * (1 - m["KGE"]) + 0.5 * np.log(2)))
+
+
+@pytest.mark.parametrize("name", ["kge_flood_storm_mean", "kge_flood_storm_worst",
+                                  "kge_storm_worst", "kge_flood_log_mean"])
+def test_the_storm_objectives_are_ones_the_engine_accepts(name):
+    assert Objective(name).value.upper() == name.upper()
 
 
 SHOW = (f'{sys.executable} -c "import json, pathlib; pathlib.Path(\'ran.txt\').write_text('

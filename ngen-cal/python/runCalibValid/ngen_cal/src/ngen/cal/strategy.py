@@ -33,6 +33,9 @@ class Objective(str, Enum):
                     "kge_flood_mean": metric_functions.kge_flood_mean,
                     "kge_flood_max": metric_functions.kge_flood_max,
                     "kge_flood_storm_mean": metric_functions.kge_flood_mean,
+                    "kge_flood_storm_worst": metric_functions.kge_flood_mean,
+                    "kge_storm_worst": metric_functions.KGE,
+                    "kge_flood_log_mean": metric_functions.kge_flood_mean,
                 }
 
     kge = "kge"
@@ -43,6 +46,9 @@ class Objective(str, Enum):
     kge_flood_mean = "kge_flood_mean"
     kge_flood_max = "kge_flood_max"
     kge_flood_storm_mean = "kge_flood_storm_mean"
+    kge_flood_storm_worst = "kge_flood_storm_worst"
+    kge_storm_worst = "kge_storm_worst"
+    kge_flood_log_mean = "kge_flood_log_mean"
 
     def __call__(self, *args, **kwargs):
         return self.__func_map__[self.value](*args, **kwargs)

@@ -23,7 +23,7 @@ import pandas as pd # type: ignore
 import logging
 
 from .gwo_global_best import GlobalBestGWO
-from .metric_functions import (treat_values, calculate_all_metrics, read_floods, flood_peak_errors,
+from .metric_functions import (treat_values, calculate_all_metrics, read_floods, KGE,
                                flood_peak_ratios, kge_flood_mean, kge_flood_max)
 from .plot_output import plot_calib_output, plot_cost_func
 from .utils import pushd, complete_msg, LiveLogPanel
@@ -155,58 +155,75 @@ def _calc_metrics(
     objective_params : The flood objectives' flood list (a CSV of peak_time and obs_peak_cms) under
         'floods' and the weight of the peak error under 'flood_weight'; with a list, the metrics
         gain FLOOD_MEAN_PEAK_ERR, FLOOD_MAX_PEAK_ERR, KGE_FLOOD_MEAN and KGE_FLOOD_MAX over the
-        listed floods that peak in eval_range. With changed forcings under 'storm_forcings' they
-        also gain FLOOD_STORM_LOG_ERR and KGE_FLOOD_STORM_MEAN
-    storm_hydrographs : The simulation under each changed forcing. With them the storm objective
-        scores each flood by |ln(Q̂ / Q)|, which reads a halved and a doubled peak alike, averaged
-        over the unchanged run and these; without them, as in a validation run, it is NaN
+        listed floods that peak in eval_range, and FLOOD_MEAN_LOG_ERR and KGE_FLOOD_LOG_MEAN, which
+        score each flood by |ln(Q̂ / Q)| and so read a halved and a doubled peak alike. With
+        changed forcings under 'storm_forcings' they also gain the storm scores
+    storm_hydrographs : The simulation under each changed forcing. With them the storm scores
+        read the unchanged run and these together: the floods' log errors averaged over the runs
+        (FLOOD_STORM_LOG_ERR, KGE_FLOOD_STORM_MEAN) or taken at each flood's worst run
+        (FLOOD_STORM_WORST_LOG_ERR, KGE_FLOOD_STORM_WORST), and the lowest KGE among the runs
+        (KGE_STORM_WORST); without them, as in a validation run, the storm scores are NaN
 
     Returns
     ----------
     Dictionary of metrics
 
     """
-    df = pd.merge(simulated_hydrograph, observed_hydrograph, left_index=True, right_index=True)
-    if df.empty:
-        logging.warning("Cannot compute objective function, do time indicies align?")
-    if eval_range:
-        df = df.loc[eval_range[0]:eval_range[1]]
+    def paired(simulated):
+        """The observed and the simulated flow over the hours scored."""
+        df = pd.merge(simulated, observed_hydrograph, left_index=True, right_index=True)
+        if df.empty:
+            logging.warning("Cannot compute objective function, do time indicies align?")
+        if eval_range:
+            df = df.loc[eval_range[0]:eval_range[1]]
 
-    df.reset_index(inplace=True)
-    df = treat_values(df, remove_neg = True, remove_na = True)
-    obsflow = df['obs_flow']
-    simflow = df['sim_flow']
+        df.reset_index(inplace=True)
+        df = treat_values(df, remove_neg = True, remove_na = True)
+        return df['obs_flow'], df['sim_flow']
 
-    metrics = calculate_all_metrics(obsflow, simflow, threshold)
+    metrics = calculate_all_metrics(*paired(simulated_hydrograph), threshold)
+    nan = float('nan')
+    storms = bool(objective_params and objective_params.get('storm_forcings'))
+    if storms:
+        metrics['KGE_STORM_WORST'] = nan
+        if storm_hydrographs:
+            metrics['KGE_STORM_WORST'] = min([metrics['KGE']]
+                                             + [KGE(*paired(run)) for run in storm_hydrographs])
     if objective_params and objective_params.get('floods'):
         floods = read_floods(str(objective_params['floods']))
         if eval_range:
             floods = floods[(floods['peak_time'] >= eval_range[0])
                             & (floods['peak_time'] <= eval_range[1])]
-        nan = float('nan')
         metrics.update({'FLOOD_MEAN_PEAK_ERR': nan, 'FLOOD_MAX_PEAK_ERR': nan,
-                        'KGE_FLOOD_MEAN': nan, 'KGE_FLOOD_MAX': nan})
-        storms = bool(objective_params.get('storm_forcings'))
+                        'KGE_FLOOD_MEAN': nan, 'KGE_FLOOD_MAX': nan,
+                        'FLOOD_MEAN_LOG_ERR': nan, 'KGE_FLOOD_LOG_MEAN': nan})
         if storms:
-            metrics.update({'FLOOD_STORM_LOG_ERR': nan, 'KGE_FLOOD_STORM_MEAN': nan})
+            metrics.update({'FLOOD_STORM_LOG_ERR': nan, 'KGE_FLOOD_STORM_MEAN': nan,
+                            'FLOOD_STORM_WORST_LOG_ERR': nan, 'KGE_FLOOD_STORM_WORST': nan})
         if len(floods):
             # the raw simulation: the observation-filtered series drops the hours a gauge
             # missed, and a window's simulated peak may sit in one of them; the engine's
             # output is a one-column sim_flow frame, taken here as a series
-            simulated = pd.DataFrame(simulated_hydrograph)['sim_flow']
-            errors = flood_peak_errors(simulated, floods)
+            ratios = flood_peak_ratios(pd.DataFrame(simulated_hydrograph)['sim_flow'], floods)
+            errors, log_errors = np.abs(ratios - 1.0), np.abs(np.log(ratios))
             weight = float(objective_params['flood_weight'])
             metrics.update({'FLOOD_MEAN_PEAK_ERR': float(np.mean(errors)),
                             'FLOOD_MAX_PEAK_ERR': float(np.max(errors)),
                             'KGE_FLOOD_MEAN': kge_flood_mean(metrics['KGE'], errors, weight),
-                            'KGE_FLOOD_MAX': kge_flood_max(metrics['KGE'], errors, weight)})
+                            'KGE_FLOOD_MAX': kge_flood_max(metrics['KGE'], errors, weight),
+                            'FLOOD_MEAN_LOG_ERR': float(np.mean(log_errors)),
+                            'KGE_FLOOD_LOG_MEAN': kge_flood_mean(metrics['KGE'], log_errors, weight)})
             if storms and storm_hydrographs:
-                runs = [simulated] + [pd.DataFrame(h)['sim_flow'] for h in storm_hydrographs]
-                log_error = float(np.mean([np.abs(np.log(flood_peak_ratios(run, floods)))
-                                           for run in runs]))
-                metrics.update({'FLOOD_STORM_LOG_ERR': log_error,
-                                'KGE_FLOOD_STORM_MEAN': kge_flood_mean(
-                                    metrics['KGE'], np.array([log_error]), weight)})
+                # one row of log errors per run, one column per flood
+                runs = np.array([log_errors] + [
+                    np.abs(np.log(flood_peak_ratios(pd.DataFrame(run)['sim_flow'], floods)))
+                    for run in storm_hydrographs])
+                worst = runs.max(axis=0)
+                metrics.update({'FLOOD_STORM_LOG_ERR': float(runs.mean()),
+                                'KGE_FLOOD_STORM_MEAN': kge_flood_mean(metrics['KGE'], runs, weight),
+                                'FLOOD_STORM_WORST_LOG_ERR': float(worst.mean()),
+                                'KGE_FLOOD_STORM_WORST': kge_flood_mean(
+                                    metrics['KGE'], worst, weight)})
     return metrics
 
 def _evaluate(i: int, calibration_object: 'Evaluatable', agent: 'Agent', info: bool=False) -> float:
