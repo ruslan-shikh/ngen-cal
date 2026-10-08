@@ -32,6 +32,22 @@ if TYPE_CHECKING:
 import logging
 
 
+def read_routed_flow(output_file: 'Path', wb_lst: Sequence) -> 'DataFrame':
+    """The hourly routed flow summed over the features of ``wb_lst``, read from ``output_file``
+    and timed by the nexus output beside it."""
+    ncvar=netCDF4.Dataset(output_file, "r")
+    fid_index = [list(ncvar['feature_id'][0:]).index(int(fid)) for fid in wb_lst]
+    output = pd.DataFrame(data={'sim_flow': pd.DataFrame(ncvar['flow'][fid_index], index=fid_index).T.sum(axis=1)})
+
+    # Get date
+    tnx_file = list(Path(output_file).parent.glob("nex*.csv"))[0]
+    tnx_df = pd.read_csv(tnx_file, index_col=0, parse_dates=[1], names=['ts', 'time', 'Q']).set_index('time')
+    dt_range = pd.date_range(tnx_df.index[1], tnx_df.index[-1], len(output.index)).round('min')
+    output.index = dt_range
+    output.index.name='Time'
+    return output.resample('1h').first()
+
+
 class CalibrationSet(Evaluatable):
     """A HY_Features based catchment with additional calibration information/functionality."""
     def __init__(self,
@@ -105,17 +121,7 @@ class CalibrationSet(Evaluatable):
         """
         try:
             # Read the routed flow at the eval_nexus
-            ncvar=netCDF4.Dataset(self._output_file, "r")
-            fid_index = [list(ncvar['feature_id'][0:]).index(int(fid)) for fid in self._wb_lst]
-            self._output = pd.DataFrame(data={'sim_flow': pd.DataFrame(ncvar['flow'][fid_index], index=fid_index).T.sum(axis=1)})
-
-            # Get date
-            tnx_file = list(Path(self._output_file).parent.glob("nex*.csv"))[0]
-            tnx_df = pd.read_csv(tnx_file, index_col=0, parse_dates=[1], names=['ts', 'time', 'Q']).set_index('time')
-            dt_range = pd.date_range(tnx_df.index[1], tnx_df.index[-1], len(self._output.index)).round('min')
-            self._output.index = dt_range
-            self._output.index.name='Time'
-            self._output = self._output.resample('1h').first()
+            self._output = read_routed_flow(self._output_file, self._wb_lst)
             hydrograph = self._output
 
         except FileNotFoundError:
@@ -130,6 +136,10 @@ class CalibrationSet(Evaluatable):
     @output.setter
     def output(self, df):
         self._output = df
+
+    def output_in(self, directory: 'Path') -> 'DataFrame':
+        """The hydrograph of a run of this set's model made in ``directory``."""
+        return read_routed_flow(Path(directory) / self._output_file, self._wb_lst)
 
     @property
     def observed(self) -> 'DataFrame':
