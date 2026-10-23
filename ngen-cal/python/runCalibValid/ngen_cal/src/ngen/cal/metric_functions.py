@@ -242,8 +242,9 @@ def NSE(
     # Transform values
     if fun == 'log':
         if epsilon=='Pushpalatha2012':
-            y_true = y_true + np.mean(y_true)/100
-            y_pred = y_pred + np.mean(y_true)/100
+            offset = np.mean(y_true)/100
+            y_true = y_true + offset
+            y_pred = y_pred + offset
             if y_true.min() == 0.0: # if not np.all(y_true)
                 y_true = y_true + 0.01
             if y_pred.min() == 0.0:
@@ -294,7 +295,7 @@ def Weighted_NSE(
     nselog = NSE(y_true, y_pred, fun="log", epsilon='Pushpalatha2012')
 
     # Compute weighted NSE
-    nsewt = nse*weight + nse*(1-weight)
+    nsewt = nse*weight + nselog*(1-weight)
 
     if normalized:
        return 1.0 / (2.0 - nsewt)
