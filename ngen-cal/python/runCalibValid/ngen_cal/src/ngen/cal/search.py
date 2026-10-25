@@ -126,12 +126,16 @@ def _execute(meta: 'Agent', i: int = None, storm_forcings: Sequence[str] = ()) -
     finally:
         _finish_storms(runs, meta.cmd)
 
-def _storm_outputs(calibration_object: 'Evaluatable', agent: 'Agent') -> list:
-    """The hydrograph of each changed-forcing run of this iteration, read from its directory,
-    which is then removed. A run that left no output raises, naming its log, since the image's
-    mpi-ngen exits 0 whatever the model does."""
+def _storm_outputs(calibration_object: 'Evaluatable', agent: 'Agent',
+                   forcings: Optional[Sequence[str]] = None) -> list:
+    """The hydrograph of each changed-forcing run of this iteration, by default the robust
+    objectives' ``storm_forcings``, read from its directory, which is then removed. A run that
+    left no output raises, naming its log, since the image's mpi-ngen exits 0 whatever the model
+    does."""
+    if forcings is None:
+        forcings = _storm_forcings(calibration_object)
     outputs = []
-    for k, forcing in enumerate(_storm_forcings(calibration_object)):
+    for k, forcing in enumerate(forcings):
         home = _storm_dir(agent.job.workdir, k)
         try:
             outputs.append(calibration_object.output_in(home))

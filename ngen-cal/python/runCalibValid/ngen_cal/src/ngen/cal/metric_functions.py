@@ -27,6 +27,7 @@ __all__ = ['treat_values',
            'categorical_score',
            'pbias_fdc',
            'read_floods',
+           'flood_peaks',
            'flood_peak_ratios',
            'flood_peak_errors',
            'kge_flood_mean',
@@ -524,11 +525,35 @@ def read_floods(path: str) -> pd.DataFrame:
     return pd.read_csv(path, parse_dates=['peak_time'])
 
 
+def flood_peaks(y_pred: pd.Series, floods: pd.DataFrame) -> pd.DataFrame:
+    """Q̂ of each listed flood, the largest simulated flow within seven days either side of the
+    observed peak hour, the window cut to the simulation's span, and the hour it falls at. Raises
+    when the simulation lacks an hour of a window, so that no flood drops out of the score unseen.
+
+    Parameters
+    ----------
+    y_pred : Modeled values on an hourly DatetimeIndex, not filtered by the observations
+    floods : peak_time and obs_peak_cms of each flood
+
+    Returns
+    ----------
+    sim_peak_cms and sim_peak_time of each flood, on the flood list's index
+    """
+    peaks, hours = [], []
+    for t in floods['peak_time']:
+        start = max(t - FLOOD_WINDOW, y_pred.index[0])
+        end = min(t + FLOOD_WINDOW, y_pred.index[-1])
+        window = y_pred.reindex(pd.date_range(start, end, freq='h'))
+        if window.isna().any():
+            raise ValueError(f"the simulation lacks hours of the flood window around {t}")
+        peaks.append(float(window.max()))
+        hours.append(window.idxmax())
+    return pd.DataFrame({'sim_peak_cms': peaks, 'sim_peak_time': hours}, index=floods.index)
+
+
 def flood_peak_ratios(y_pred: pd.Series, floods: pd.DataFrame) -> np.ndarray:
-    """Q̂ / Q of each listed flood: Q the list's observed peak, Q̂ the largest simulated flow
-    within seven days either side of the observed peak hour, the window cut to the simulation's
-    span. Raises when the simulation lacks an hour of a window, so that no flood
-    drops out of the score unseen.
+    """Q̂ / Q of each listed flood: Q the list's observed peak, Q̂ its simulated peak
+    (``flood_peaks``).
 
     Parameters
     ----------
@@ -539,15 +564,8 @@ def flood_peak_ratios(y_pred: pd.Series, floods: pd.DataFrame) -> np.ndarray:
     ----------
     One ratio per flood
     """
-    ratios = []
-    for t, q in zip(floods['peak_time'], floods['obs_peak_cms']):
-        start = max(t - FLOOD_WINDOW, y_pred.index[0])
-        end = min(t + FLOOD_WINDOW, y_pred.index[-1])
-        window = y_pred.reindex(pd.date_range(start, end, freq='h'))
-        if window.isna().any():
-            raise ValueError(f"the simulation lacks hours of the flood window around {t}")
-        ratios.append(float(window.max()) / q)
-    return np.array(ratios, dtype=float)
+    peaks = flood_peaks(y_pred, floods)['sim_peak_cms'].to_numpy()
+    return np.array(peaks / floods['obs_peak_cms'].to_numpy(), dtype=float)
 
 
 def flood_peak_errors(y_pred: pd.Series, floods: pd.DataFrame) -> np.ndarray:

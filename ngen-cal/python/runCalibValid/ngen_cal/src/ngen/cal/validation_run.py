@@ -13,6 +13,7 @@ import pandas as pd
 
 from .plot_output import plot_valid_output
 from .search import _execute, _calc_metrics
+from .stress_test import run_stress_test
 from .utils import pushd, complete_msg
 
 if TYPE_CHECKING:
@@ -49,6 +50,10 @@ def run_valid_ctrl_best(agent: 'Agent') -> None:
                 tmp = {**{'run': agent.run_name, 'period': key}, **result}
                 metrics = pd.concat([metrics, pd.DataFrame([tmp])], ignore_index=True)
                 calibration_object.write_valid_metric_file(agent.workdir, agent.run_name, metrics)
+
+            # The storm stress test, where the config lists its changed forcings
+            if agent.run_name=='valid_best':
+                run_stress_test(agent, calibration_object)
 
             # Save and move output
             calibration_object.save_valid_output(calibration_object.basinID, agent.run_name, agent.valid_path, agent.job.workdir, agent.valid_path_output)
