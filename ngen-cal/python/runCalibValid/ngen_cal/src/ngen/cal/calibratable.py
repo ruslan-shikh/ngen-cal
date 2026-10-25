@@ -257,7 +257,7 @@ class Evaluatable(ABC):
 
     @property
     def objective_params(self):
-        """The flood objectives' flood list and weight, when the objective uses them"""
+        """The flood list, flood weight and changed forcings of the flood and robust objectives"""
         return self.eval_params.objective_params
 
     @property

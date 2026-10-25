@@ -27,6 +27,7 @@ __all__ = ['treat_values',
            'categorical_score',
            'pbias_fdc',
            'read_floods',
+           'flood_peak_ratios',
            'flood_peak_errors',
            'kge_flood_mean',
           ]
@@ -523,11 +524,11 @@ def read_floods(path: str) -> pd.DataFrame:
     return pd.read_csv(path, parse_dates=['peak_time'])
 
 
-def flood_peak_errors(y_pred: pd.Series, floods: pd.DataFrame) -> np.ndarray:
-    """Peak error |Q̂ − Q| / Q of each listed flood: Q the list's observed peak, Q̂ the largest
-    simulated flow within seven days either side of the observed peak hour, the window cut to
-    the simulation's span. Raises when the simulation lacks an hour of a window, so that no
-    flood drops out of the score unseen.
+def flood_peak_ratios(y_pred: pd.Series, floods: pd.DataFrame) -> np.ndarray:
+    """Q̂ / Q of each listed flood: Q the list's observed peak, Q̂ the largest simulated flow
+    within seven days either side of the observed peak hour, the window cut to the simulation's
+    span. Raises when the simulation lacks an hour of a window, so that no flood
+    drops out of the score unseen.
 
     Parameters
     ----------
@@ -536,17 +537,22 @@ def flood_peak_errors(y_pred: pd.Series, floods: pd.DataFrame) -> np.ndarray:
 
     Returns
     ----------
-    One peak error per flood
+    One ratio per flood
     """
-    errors = []
+    ratios = []
     for t, q in zip(floods['peak_time'], floods['obs_peak_cms']):
         start = max(t - FLOOD_WINDOW, y_pred.index[0])
         end = min(t + FLOOD_WINDOW, y_pred.index[-1])
         window = y_pred.reindex(pd.date_range(start, end, freq='h'))
         if window.isna().any():
             raise ValueError(f"the simulation lacks hours of the flood window around {t}")
-        errors.append(abs(float(window.max()) - q) / q)
-    return np.array(errors, dtype=float)
+        ratios.append(float(window.max()) / q)
+    return np.array(ratios, dtype=float)
+
+
+def flood_peak_errors(y_pred: pd.Series, floods: pd.DataFrame) -> np.ndarray:
+    """Peak error |Q̂ − Q| / Q of each listed flood (``flood_peak_ratios``)."""
+    return np.abs(flood_peak_ratios(y_pred, floods) - 1.0)
 
 
 def kge_flood_mean(kge: float, errors: np.ndarray, weight: float) -> float:

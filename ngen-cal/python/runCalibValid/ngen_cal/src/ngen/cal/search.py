@@ -5,14 +5,17 @@ This module contains functions to perform parameter optimization using different
 """
 
 import glob
+import json
 from functools import partial
 from math import log
 from multiprocessing import pool
 import os
+from pathlib import Path
+import shutil
 import subprocess
 import threading
 from datetime import datetime
-from typing import Any, Dict, Optional, Tuple, TYPE_CHECKING
+from typing import Any, Dict, List, Optional, Sequence, Tuple, TYPE_CHECKING
 
 import numpy as np # type: ignore
 import pandas as pd # type: ignore
@@ -20,8 +23,8 @@ import pandas as pd # type: ignore
 import logging
 
 from .gwo_global_best import GlobalBestGWO
-from .metric_functions import (treat_values, calculate_all_metrics, read_floods, flood_peak_errors,
-                               kge_flood_mean)
+from .metric_functions import (treat_values, calculate_all_metrics, read_floods, KGE,
+                               flood_peak_ratios, kge_flood_mean)
 from .plot_output import plot_calib_output, plot_cost_func
 from .utils import pushd, complete_msg, LiveLogPanel
 
@@ -43,28 +46,100 @@ __iteration_counter = 1
 # def tail_logfile(log_file: str, n_lines: int = 10) -> str:
 #     os.system(f"tail -f {logfile}")
 
-def _execute(meta: 'Agent', i: int = None) -> None:
+def _storm_forcings(calibration_object: 'Evaluatable') -> List[str]:
+    """The changed forcings the robust objectives run beside the unchanged one, if any."""
+    return list((calibration_object.objective_params or {}).get('storm_forcings') or [])
+
+def _storm_dir(workdir: Path, k: int) -> Path:
+    """Where the k-th changed-forcing run of an iteration works, under the worker's directory."""
+    return Path(workdir) / 'storm_{}'.format(k)
+
+def _start_storms(meta: 'Agent', forcings: Sequence[str]) -> list:
+    """Start the model under each changed forcing at the worker's current parameters.
+
+    Each run works in a fresh directory of its own under the worker's, on the worker's
+    realization with the forcing path replaced, so its output cannot mix with another run's.
+
+    Parameters
+    ----------
+    meta : Agent object
+    forcings : Forcing files to run, as the model sees them
+
+    Returns
+    ----------
+    The started runs, each with its open log
+
+    """
+    if not forcings:
+        return []
+    name = Path(str(meta.realization_file)).name
+    text = (Path(meta.job.workdir) / name).read_text()
+    unchanged = json.dumps(json.loads(text)['global']['forcing']['path'])
+    if unchanged not in text:
+        raise ValueError("the realization's forcing path is not written as {}".format(unchanged))
+    runs = []
+    for k, forcing in enumerate(forcings):
+        home = _storm_dir(meta.job.workdir, k)
+        shutil.rmtree(home, ignore_errors=True)
+        home.mkdir()
+        (home / name).write_text(text.replace(unchanged, json.dumps(str(forcing))))
+        log_file = open(home / 'run.log', 'w')
+        runs.append((subprocess.Popen(meta.cmd, stdout=log_file, stderr=log_file, shell=True, cwd=home), log_file))
+    return runs
+
+def _finish_storms(runs: list, cmd: str) -> None:
+    """Wait for the changed-forcing runs and raise if one failed."""
+    codes = []
+    for process, log_file in runs:
+        codes.append(process.wait())
+        log_file.close()
+    for code in codes:
+        if code:
+            raise subprocess.CalledProcessError(code, cmd)
+
+def _execute(meta: 'Agent', i: int = None, storm_forcings: Sequence[str] = ()) -> None:
     """Execute model run via BMI.
 
     Parameters
     ----------
     meta : Agent object
     i : Current iteration, default None
+    storm_forcings : Changed forcings to run at the same parameters, beside this run and at
+        the same time, each in its own directory (``_storm_dir``)
 
     """
-    if meta.job.log_file is None:
-        subprocess.check_call(meta.cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, shell=True, cwd=meta.job.workdir)
-    else:
-        run_log_file = str(meta.job.log_file)
-        if not os.path.exists(run_log_file):
-            with open(run_log_file, 'w') as log_file:
-                log_file.write('Starting ' + '{}'.format(meta.run_name).capitalize() + ' Run\n')
-        if i is not None:
-            with open(run_log_file, 'a+') as log_file:
-                log_file.write('------ Iteration = {}'.format(i) + ' ------\n')
-        with LiveLogPanel(run_log_file) as live_log_panel:
-            with open(run_log_file, 'a+') as log_file:
-                subprocess.check_call(meta.cmd, stdout=log_file, stderr=log_file, shell=True, cwd=meta.job.workdir)
+    runs = _start_storms(meta, storm_forcings)
+    try:
+        if meta.job.log_file is None:
+            subprocess.check_call(meta.cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, shell=True, cwd=meta.job.workdir)
+        else:
+            run_log_file = str(meta.job.log_file)
+            if not os.path.exists(run_log_file):
+                with open(run_log_file, 'w') as log_file:
+                    log_file.write('Starting ' + '{}'.format(meta.run_name).capitalize() + ' Run\n')
+            if i is not None:
+                with open(run_log_file, 'a+') as log_file:
+                    log_file.write('------ Iteration = {}'.format(i) + ' ------\n')
+            with LiveLogPanel(run_log_file) as live_log_panel:
+                with open(run_log_file, 'a+') as log_file:
+                    subprocess.check_call(meta.cmd, stdout=log_file, stderr=log_file, shell=True, cwd=meta.job.workdir)
+    finally:
+        _finish_storms(runs, meta.cmd)
+
+def _storm_outputs(calibration_object: 'Evaluatable', agent: 'Agent') -> list:
+    """The hydrograph of each changed-forcing run of this iteration, read from its directory,
+    which is then removed. A run that left no output raises, naming its log, since the image's
+    mpi-ngen exits 0 whatever the model does."""
+    outputs = []
+    for k, forcing in enumerate(_storm_forcings(calibration_object)):
+        home = _storm_dir(agent.job.workdir, k)
+        try:
+            outputs.append(calibration_object.output_in(home))
+        except FileNotFoundError as error:
+            raise RuntimeError("the run under {} left no output; see {}".format(
+                forcing, home / 'run.log')) from error
+        shutil.rmtree(home)
+    return outputs
 
 def _calc_metrics(
     simulated_hydrograph: pd.Series,
@@ -72,6 +147,7 @@ def _calc_metrics(
     eval_range: Tuple[datetime, datetime] = None,
     threshold: Optional[float] = None,
     objective_params: Optional[Dict[str, Any]] = None,
+    storm_hydrographs: Optional[Sequence[pd.Series]] = None,
 ) -> Dict[str, float]:
     """Calculate statistical metrics.
 
@@ -82,44 +158,68 @@ def _calc_metrics(
     eval_range : Evaluation time period for calibration run
     threshold : Streamflow threshold for calculating categorical scores
     objective_params : The flood objectives' flood list (a CSV of peak_time and obs_peak_cms) under
-        'floods' and the weight of the peak error under 'flood_weight'; with a list, the metrics
+        'floods' and the weight of the flood term under 'flood_weight'; with a list, the metrics
         gain FLOOD_MEAN_PEAK_ERR, FLOOD_MAX_PEAK_ERR and KGE_FLOOD_MEAN over the
-        listed floods that peak in eval_range
+        listed floods that peak in eval_range. With changed forcings under 'storm_forcings' they
+        also gain the robust scores
+    storm_hydrographs : The simulation under each changed forcing. With them the robust scores
+        read the unchanged run and these together: each flood's largest |ln(Q̂ / Q)| among the
+        runs, averaged over the floods (FLOOD_ROBUST_LOG_ERR, KGE_FLOOD_ROBUST), and the lowest
+        KGE among the runs (KGE_ROBUST); without them, as in a validation run, the robust scores
+        are NaN
 
     Returns
     ----------
     Dictionary of metrics
 
     """
-    df = pd.merge(simulated_hydrograph, observed_hydrograph, left_index=True, right_index=True)
-    if df.empty:
-        logging.warning("Cannot compute objective function, do time indicies align?")
-    if eval_range:
-        df = df.loc[eval_range[0]:eval_range[1]]
+    def paired(simulated):
+        """The observed and the simulated flow over the hours scored."""
+        df = pd.merge(simulated, observed_hydrograph, left_index=True, right_index=True)
+        if df.empty:
+            logging.warning("Cannot compute objective function, do time indicies align?")
+        if eval_range:
+            df = df.loc[eval_range[0]:eval_range[1]]
 
-    df.reset_index(inplace=True)
-    df = treat_values(df, remove_neg = True, remove_na = True)
-    obsflow = df['obs_flow']
-    simflow = df['sim_flow']
+        df.reset_index(inplace=True)
+        df = treat_values(df, remove_neg = True, remove_na = True)
+        return df['obs_flow'], df['sim_flow']
 
-    metrics = calculate_all_metrics(obsflow, simflow, threshold)
+    metrics = calculate_all_metrics(*paired(simulated_hydrograph), threshold)
+    nan = float('nan')
+    storms = bool(objective_params and objective_params.get('storm_forcings'))
+    if storms:
+        metrics['KGE_ROBUST'] = nan
+        if storm_hydrographs:
+            metrics['KGE_ROBUST'] = min([metrics['KGE']]
+                                        + [KGE(*paired(run)) for run in storm_hydrographs])
     if objective_params and objective_params.get('floods'):
         floods = read_floods(str(objective_params['floods']))
         if eval_range:
             floods = floods[(floods['peak_time'] >= eval_range[0])
                             & (floods['peak_time'] <= eval_range[1])]
-        nan = float('nan')
         metrics.update({'FLOOD_MEAN_PEAK_ERR': nan, 'FLOOD_MAX_PEAK_ERR': nan,
                         'KGE_FLOOD_MEAN': nan})
+        if storms:
+            metrics.update({'FLOOD_ROBUST_LOG_ERR': nan, 'KGE_FLOOD_ROBUST': nan})
         if len(floods):
             # the raw simulation: the observation-filtered series drops the hours a gauge
             # missed, and a window's simulated peak may sit in one of them; the engine's
             # output is a one-column sim_flow frame, taken here as a series
-            errors = flood_peak_errors(pd.DataFrame(simulated_hydrograph)['sim_flow'], floods)
+            ratios = flood_peak_ratios(pd.DataFrame(simulated_hydrograph)['sim_flow'], floods)
+            errors = np.abs(ratios - 1.0)
             weight = float(objective_params['flood_weight'])
             metrics.update({'FLOOD_MEAN_PEAK_ERR': float(np.mean(errors)),
                             'FLOOD_MAX_PEAK_ERR': float(np.max(errors)),
                             'KGE_FLOOD_MEAN': kge_flood_mean(metrics['KGE'], errors, weight)})
+            if storms and storm_hydrographs:
+                # one row per run, one column per flood; the log reads a halved and a doubled
+                # peak alike
+                runs = np.array([ratios] + [flood_peak_ratios(pd.DataFrame(run)['sim_flow'], floods)
+                                            for run in storm_hydrographs])
+                worst = np.abs(np.log(runs)).max(axis=0)
+                metrics.update({'FLOOD_ROBUST_LOG_ERR': float(worst.mean()),
+                                'KGE_FLOOD_ROBUST': kge_flood_mean(metrics['KGE'], worst, weight)})
     return metrics
 
 def _evaluate(i: int, calibration_object: 'Evaluatable', agent: 'Agent', info: bool=False) -> float:
@@ -140,7 +240,7 @@ def _evaluate(i: int, calibration_object: 'Evaluatable', agent: 'Agent', info: b
     """
     # Calculate objective function and metrics
     metrics = _calc_metrics(calibration_object.output, calibration_object.observed, calibration_object.evaluation_range, calibration_object.threshold,
-                            calibration_object.objective_params)
+                            calibration_object.objective_params, _storm_outputs(calibration_object, agent))
     metric_objective_function = metrics[calibration_object.objective.value.upper()]
     score = 1 - metric_objective_function if calibration_object.target == 'min' else metric_objective_function
 
@@ -241,7 +341,7 @@ def dds(start_iteration: int, iterations: int,  calibration_object: 'Evaluatable
         if calibration_object.output is None:
             logging.info("Running {} to produce initial simulation".format(agent.cmd))
             agent.update_config(start_iteration, calibration_object.df[[str(start_iteration), 'param', 'model']], calibration_object.id)
-            _execute(agent, start_iteration)
+            _execute(agent, start_iteration, _storm_forcings(calibration_object))
         with pushd(agent.job.workdir):
             _evaluate(0, calibration_object, agent, info=True)
         calibration_object.check_point(agent.job.workdir)
@@ -254,7 +354,7 @@ def dds(start_iteration: int, iterations: int,  calibration_object: 'Evaluatable
         remaining = (elapsed/i) * ((iterations+1)-i)
         logging.debug("Running {}".format(agent.cmd))
         logging.info("Iteration {}/{} Time elapsed: {}, estimated remaining: {}".format(i, iterations, elapsed, remaining))
-        _execute(agent, i)
+        _execute(agent, i, _storm_forcings(calibration_object))
         with pushd(agent.job.workdir):
             _evaluate(i, calibration_object, agent)
         calibration_object.check_point(agent.job.workdir)
@@ -294,7 +394,7 @@ def dds_set(start_iteration: int, iterations: int, agent: 'Agent')->None:
             logging.debug(calibration_set.output)
             if calibration_set.output is None:
                 logging.info("Running {} to produce initial simulation".format(agent.cmd))
-                _execute(agent, start_iteration)
+                _execute(agent, start_iteration, _storm_forcings(calibration_set))
             with pushd(agent.job.workdir):
                 _evaluate(0, calibration_set, agent, info=True)
             calibration_set.check_point(agent.job.workdir)
@@ -311,7 +411,7 @@ def dds_set(start_iteration: int, iterations: int, agent: 'Agent')->None:
             remaining = (elapsed/i) * ((iterations+1)-i)
             logging.debug("Running {}".format(agent.cmd))
             logging.info("Iteration {}/{} Time elapsed: {}, estimated remaining: {}".format(i, iterations, elapsed, remaining))
-            _execute(agent, i)
+            _execute(agent, i, _storm_forcings(calibration_set))
             with pushd(agent.job.workdir):
                 _evaluate(i, calibration_set, agent)
             calibration_set.check_point(agent.job.workdir)
