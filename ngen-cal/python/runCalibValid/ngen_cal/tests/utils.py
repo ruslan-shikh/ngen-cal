@@ -1,4 +1,8 @@
 from pathlib import Path
+
+import numpy as np
+import pandas as pd
+
 _where = str(Path(__file__).parent)
 global_config = {
     "global": {
@@ -149,3 +153,24 @@ evaluation_options = {"eval_params":{
                     }
 
 model_params = {"binary":"echo", "args":"ngen args", **evaluation_options}
+
+
+HOURS = pd.date_range("2020-01-01 01:00", periods=2000, freq="h")
+
+
+def hydrograph(*peaks, name="sim_flow", base=1.0) -> pd.Series:
+    """Return an hourly flow with a triangular peak at each (hour, height)."""
+    q = np.full(len(HOURS), base)
+    for at, height in peaks:
+        for k in range(-12, 13):
+            q[at + k] = max(q[at + k], base + (height - base) * (1 - abs(k) / 12))
+    return pd.Series(q, index=HOURS, name=name)
+
+
+def flood_list(tmp_path, *floods) -> str:
+    """Write a flood list of (hour, observed peak) pairs and return its path."""
+    path = tmp_path / "floods.csv"
+    pd.DataFrame({"peak_time": [HOURS[at] for at, _ in floods],
+                  "obs_peak_cms": [q for _, q in floods]}).to_csv(path, index=False)
+    return str(path)
+

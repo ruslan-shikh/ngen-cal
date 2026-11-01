@@ -31,12 +31,14 @@ class Objective(str, Enum):
                     "rsr": metric_functions.rmse_std_ratio,
                     "nnse": metric_functions. Weighted_NSE,
                 }
+    # kge_flood has no entry: search.py scores it from the flood list as well as the flows
 
     kge = "kge"
     nse = "nse"
     nnse = "nnse"
     rmse = "rmse"
     rsr = "rsr"
+    kge_flood = "kge_flood"
 
     def __call__(self, *args, **kwargs):
         return self.__func_map__[self.value](*args, **kwargs)

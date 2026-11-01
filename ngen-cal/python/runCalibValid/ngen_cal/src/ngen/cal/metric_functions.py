@@ -25,6 +25,9 @@ __all__ = ['treat_values',
            'KGE',
            'categorical_score',
            'pbias_fdc',
+           'read_floods',
+           'flood_peaks',
+           'kge_flood',
           ]
 
 
@@ -508,3 +511,43 @@ def calculate_all_metrics(
         else:
              result.update({metric_name[f.__name__]: f(y_true, y_pred)})
     return result
+
+
+FLOOD_WINDOW = pd.Timedelta(days=7)
+
+
+def read_floods(path: str) -> pd.DataFrame:
+    """Read a flood list CSV with columns peak_time (on the hour) and obs_peak_cms (m3/s)."""
+    floods = pd.read_csv(path, parse_dates=['peak_time'])
+    if 'obs_peak_cms' not in floods:
+        raise ValueError(f"{path} has no obs_peak_cms column")
+    return floods
+
+
+def flood_peaks(y_pred: pd.Series, floods: pd.DataFrame) -> pd.DataFrame:
+    """Find each flood's simulated peak.
+
+    The simulated peak is the largest simulated flow within seven days of the observed peak,
+    cut at the start and end of the simulation. A NaN flow in that window gives a NaN peak.
+
+    Parameters
+    ----------
+    y_pred : Simulated flow on a DatetimeIndex, including hours without observations
+    floods : peak_time and obs_peak_cms of each flood
+
+    Returns
+    ----------
+    The floods with sim_peak_cms, the simulated peak, and sim_peak_time, its time
+    """
+    peaks, times = [], []
+    for t in floods['peak_time']:
+        window = y_pred.loc[t - FLOOD_WINDOW:t + FLOOD_WINDOW]
+        peak = window.max(skipna=False)
+        peaks.append(peak)
+        times.append(window.idxmax() if np.isfinite(peak) else pd.NaT)
+    return floods.assign(sim_peak_cms=peaks, sim_peak_time=times)
+
+
+def kge_flood(kge: float, errors: np.ndarray, weight: float) -> float:
+    """Return 1 - [(1 - weight)(1 - kge) + weight * mean(errors)]; higher is better, as for KGE."""
+    return 1.0 - ((1.0 - weight) * (1.0 - kge) + weight * float(np.mean(errors)))

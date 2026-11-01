@@ -8,7 +8,7 @@ This repository contains a modified version of ngen-cal designed to work with Ne
 Understanding Docker containers and how to use `docker exec` is recommended if you need to troubleshoot.
 1. **Limited Calibration Algorithms**: Currently only configured to use the Dynamically Dimensioned Search (DDS) algorithm. Other algorithms available in the main ngen-cal branch are not supported.
 
-2. **Single-Gage Calibration**: Designed for calibrating single-basin models using one USGS streamgage. Multi-gage or multi-objective calibration is not supported *_by this branch_*.
+2. **Single-Gage Calibration**: Designed for calibrating single-basin models using one USGS streamgage. Multi-gage or multi-objective calibration is not supported *_by this branch_*. The [flood objective](#flood-objective) combines KGE and flood peaks into one weighted score.
 
 4. **Custom ngen-cal Branch**: Uses a modified version of ngen-cal from the `ngiab_cal` branch, which differs from the main branch. Features from newer releases of ngen-cal may not be available.
 
@@ -62,6 +62,29 @@ To modify the calibration configuration parameters, you should:
    ```
 
 2. Be aware that running ngiab-cal with the `-f` flag will overwrite any manual changes.
+
+## Flood objective
+
+The objective `kge_flood` adds the error in flood peaks to KGE. Set it in `ngen_cal_conf.yaml`:
+
+```yaml
+model:
+  eval_params:
+    objective: kge_flood
+    floods: /ngen/ngen/data/calibration/floods.csv
+    flood_weight: 0.5
+```
+
+The calibration minimizes `(1 - w)(1 - KGE) + w*E`, where `w` is `flood_weight` (0 to 1) and `E` is the mean peak error `|sim - obs| / obs` of the floods that peak in the calibration period. `obs` is a flood's observed peak and `sim` is the largest simulated flow within seven days of it. The floods CSV has two columns: `peak_time`, the hour of the observed peak, and `obs_peak_cms`, the observed peak in m3/s. The config fails to load if no flood's peak falls between `evaluation_start` and `evaluation_stop`.
+
+If `floods` is set, the metrics files get four more columns, whatever the objective:
+
+- `FLOOD_MEAN_PEAK_ERR`: `E`
+- `FLOOD_MAX_PEAK_ERR`: the largest peak error
+- `FLOOD_MEAN_SHIFT_H`: the mean number of hours between the simulated and observed peaks
+- `KGE_FLOOD`: one minus the loss above
+
+They are NaN for a period with no flood.
 
 ## Custom Building
 

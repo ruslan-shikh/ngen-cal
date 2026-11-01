@@ -256,6 +256,16 @@ class Evaluatable(ABC):
         return self.eval_params.threshold
 
     @property
+    def floods(self):
+        """Optional flood list CSV for the kge_flood objective and the flood metrics"""
+        return self.eval_params.floods
+
+    @property
+    def flood_weight(self):
+        """Weight of the mean flood peak error in the kge_flood objective"""
+        return self.eval_params.flood_weight
+
+    @property
     def user(self) -> str:
         """User's email address to receieve run complete message"""
         return self.eval_params.user

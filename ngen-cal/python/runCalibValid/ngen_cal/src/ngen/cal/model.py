@@ -21,9 +21,10 @@ except ImportError:
     from typing_extensions import Literal
 
 import pandas as pd
-from pydantic import BaseModel, DirectoryPath, conint, PyObject, validator, Field
+from pydantic import BaseModel, DirectoryPath, FilePath, confloat, conint, PyObject, validator, Field
 import yaml
 
+from .metric_functions import read_floods
 from .strategy import Objective
 
 import logging
@@ -76,6 +77,8 @@ class EvaluationOptions(BaseModel):
     id: Optional[str]
     basinID: Optional[str]
     threshold: Optional[float] 
+    floods: Optional[FilePath]
+    flood_weight: Optional[confloat(ge=0, le=1)]
     site_name: Optional[str] 
     streamflow_name: Optional[str] = 'sim_flow'
     save_output_iteration: Optional[bool] = False
@@ -565,6 +568,27 @@ class EvaluationOptions(BaseModel):
         if value is None:
             logging.warning("Objective cannot be none -- setting default objective")
             value = Objective.kge
+        return value
+
+    @validator("flood_weight", always=True)
+    def validate_floods(cls, value, values):
+        floods = values.get('floods')
+        flood_objective = values.get('objective') == Objective.kge_flood
+        if floods is None:
+            if flood_objective:
+                raise ValueError("objective kge_flood needs 'floods' and 'flood_weight'")
+            return value
+        if value is None:
+            raise ValueError("'floods' needs 'flood_weight'")
+        table = read_floods(floods)
+        if flood_objective:
+            start, stop = values.get('evaluation_start'), values.get('evaluation_stop')
+            if start and stop:
+                table = table[table['peak_time'].between(start, stop)]
+            # with no flood every score is NaN, and the search never moves past its first iteration
+            if table.empty:
+                raise ValueError("objective kge_flood: no flood in {} peaks between evaluation_start "
+                                 "and evaluation_stop".format(floods))
         return value
 
 
