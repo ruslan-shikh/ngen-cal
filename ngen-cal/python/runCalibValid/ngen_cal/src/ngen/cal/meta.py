@@ -33,7 +33,7 @@ class JobMeta:
         if(workdir is None):
             self._workdir = Path( mkdtemp(dir=parent_workdir, prefix=name+"_", suffix="_worker") ).resolve()
         else:
-            self._workdir = workdir
+            self._workdir = Path(workdir).resolve()
 
         self._log_file = None
         if(log):

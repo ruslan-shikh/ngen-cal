@@ -86,6 +86,13 @@ If `floods` is set, the metrics files get four more columns, whatever the object
 
 They are NaN for a period with no flood.
 
+### Changed storms
+
+Two settings rerun the model with the storms in the forcing changed. Both need the `uniform` strategy, and each run uses as many cores as the main run.
+
+- `objective: kge_flood_robust` with `storm_forcings`, a list of forcing files, runs every iteration once under each of them as well. It replaces `E` with the mean, over the floods, of each flood's largest `|ln(sim / obs)|` across all the runs, and reports it as `FLOOD_ROBUST_LOG_ERR`. KGE still comes from the original forcing.
+- `stress_test`, a CSV with the columns `depth`, `concentration` and `forcing`, reruns the best parameters under each forcing after the validation run. It needs `floods`. For the floods in the validation period it writes `<basin>_stress_floods_<run>.csv` (each flood's peak, peak error and timing under every forcing), `<basin>_stress_kge_<run>.csv` (KGE under every forcing) and `<basin>_stress_summary_<run>.csv` (each flood's largest `|ln(sim / obs)|` over the forcings, and how its peak responds to storm depth).
+
 ## Custom Building
 
 If you need to modify the container:

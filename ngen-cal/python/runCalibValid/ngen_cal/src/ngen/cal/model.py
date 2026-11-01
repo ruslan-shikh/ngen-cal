@@ -14,7 +14,7 @@ from pathlib import Path
 import shutil
 import time
 
-from typing import Optional, Tuple, Union
+from typing import List, Optional, Tuple, Union
 try: #to get literal in python 3.7, it was added to typing in 3.8
     from typing import Literal
 except ImportError:
@@ -79,6 +79,8 @@ class EvaluationOptions(BaseModel):
     threshold: Optional[float] 
     floods: Optional[FilePath]
     flood_weight: Optional[confloat(ge=0, le=1)]
+    storm_forcings: List[FilePath] = []
+    stress_test: Optional[FilePath]
     site_name: Optional[str] 
     streamflow_name: Optional[str] = 'sim_flow'
     save_output_iteration: Optional[bool] = False
@@ -573,10 +575,11 @@ class EvaluationOptions(BaseModel):
     @validator("flood_weight", always=True)
     def validate_floods(cls, value, values):
         floods = values.get('floods')
-        flood_objective = values.get('objective') == Objective.kge_flood
+        objective = values.get('objective')
+        flood_objective = objective in (Objective.kge_flood, Objective.kge_flood_robust)
         if floods is None:
             if flood_objective:
-                raise ValueError("objective kge_flood needs 'floods' and 'flood_weight'")
+                raise ValueError("objective {} needs 'floods' and 'flood_weight'".format(objective.value))
             return value
         if value is None:
             raise ValueError("'floods' needs 'flood_weight'")
@@ -587,8 +590,35 @@ class EvaluationOptions(BaseModel):
                 table = table[table['peak_time'].between(start, stop)]
             # with no flood every score is NaN, and the search never moves past its first iteration
             if table.empty:
-                raise ValueError("objective kge_flood: no flood in {} peaks between evaluation_start "
-                                 "and evaluation_stop".format(floods))
+                raise ValueError("objective {}: no flood in {} peaks between evaluation_start "
+                                 "and evaluation_stop".format(objective.value, floods))
+        return value
+
+    @validator("storm_forcings", always=True)
+    def validate_storm_forcings(cls, value, values):
+        robust = values.get('objective') == Objective.kge_flood_robust
+        if value and not robust:
+            # every iteration would run the storm forcings for a score that nothing optimizes
+            raise ValueError("'storm_forcings' needs objective kge_flood_robust")
+        if robust and not value:
+            raise ValueError("objective kge_flood_robust needs 'storm_forcings'")
+        return value
+
+    @validator("stress_test")
+    def validate_stress_test(cls, value, values):
+        if value is None:
+            return value
+        # the stress test reports the floods in the validation period
+        if values.get('floods') is None:
+            raise ValueError("'stress_test' needs 'floods'")
+        # check now, rather than after the calibration has run
+        changes = pd.read_csv(value)
+        missing = {'depth', 'concentration', 'forcing'} - set(changes.columns)
+        if missing:
+            raise ValueError("{} has no column {}".format(value, ", ".join(sorted(missing))))
+        absent = [f for f in changes['forcing'] if not Path(f).is_file()]
+        if absent:
+            raise ValueError("'stress_test' forcing {} does not exist".format(absent[0]))
         return value
 
 

@@ -39,6 +39,7 @@ class Objective(str, Enum):
     rmse = "rmse"
     rsr = "rsr"
     kge_flood = "kge_flood"
+    kge_flood_robust = "kge_flood_robust"
 
     def __call__(self, *args, **kwargs):
         return self.__func_map__[self.value](*args, **kwargs)

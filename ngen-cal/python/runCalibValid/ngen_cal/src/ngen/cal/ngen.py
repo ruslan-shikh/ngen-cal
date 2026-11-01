@@ -250,6 +250,19 @@ class NgenBase(ModelExec):
             raise ValueError("Must provide partitions if using parallel")
         return values
 
+    @root_validator
+    def check_storm_strategy(cls, values: dict):
+        """Check that storm_forcings and stress_test are used with the uniform strategy.
+
+        Their runs change only the global forcing, and under the other strategies each
+        catchment sets its own.
+        """
+        eval_params = values.get("eval_params")
+        storms = getattr(eval_params, "storm_forcings", None) or getattr(eval_params, "stress_test", None)
+        if storms and values.get("strategy") != NgenStrategy.uniform:
+            raise ValueError("'storm_forcings' and 'stress_test' need the uniform strategy")
+        return values
+
     def update_config(self, i: int, params: "pd.DataFrame", id: str = None, path=Path("./")):
         """_summary_
 

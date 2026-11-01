@@ -1,4 +1,7 @@
+import json
+import sys
 from pathlib import Path
+from types import SimpleNamespace
 
 import numpy as np
 import pandas as pd
@@ -174,3 +177,17 @@ def flood_list(tmp_path, *floods) -> str:
                   "obs_peak_cms": [q for _, q in floods]}).to_csv(path, index=False)
     return str(path)
 
+
+# a model run that writes the forcing path of its realization to ran.txt
+SHOW = (f'{sys.executable} -c "import json, pathlib; pathlib.Path(\'ran.txt\').write_text('
+        'json.load(open(\'realization.json\'))[\'global\'][\'forcing\'][\'path\'])"')
+
+
+def worker(tmp_path, cmd=SHOW, run_name="calib") -> SimpleNamespace:
+    """Write a realization into tmp_path and return an agent that runs cmd there."""
+    (tmp_path / "realization.json").write_text(json.dumps(
+        {"global": {"forcing": {"path": "/data/forcings.nc", "provider": "NetCDF"}},
+         "time": {"start_time": "2014-10-01 00:00:00"}}, indent=4))
+    return SimpleNamespace(job=SimpleNamespace(workdir=tmp_path, log_file=None), cmd=cmd,
+                           realization_file=Path("/somewhere/else/realization.json"),
+                           run_name=run_name, workdir=tmp_path)

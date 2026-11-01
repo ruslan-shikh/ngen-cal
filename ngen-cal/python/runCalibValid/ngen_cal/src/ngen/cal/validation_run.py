@@ -13,6 +13,7 @@ import pandas as pd
 
 from .plot_output import plot_valid_output
 from .search import _execute, _calc_metrics
+from .stress_test import run_stress_test
 from .utils import pushd, complete_msg
 
 if TYPE_CHECKING:
@@ -51,6 +52,7 @@ def run_valid_ctrl_best(agent: 'Agent') -> None:
                 calibration_object.write_valid_metric_file(agent.workdir, agent.run_name, metrics)
 
             # Save and move output
+            simulated = calibration_object.output  # for the stress test, read before the move
             calibration_object.save_valid_output(calibration_object.basinID, agent.run_name, agent.valid_path, agent.job.workdir, agent.valid_path_output)
 
             # Plot
@@ -60,3 +62,7 @@ def run_valid_ctrl_best(agent: 'Agent') -> None:
             # Indicate completion
             calibration_object.write_run_complete_file(agent.run_name, agent.workdir)
             #complete_msg(calibration_object.basinID, agent.run_name, agent.workdir, calibration_object.user)
+
+            # Stress test last, so that a failure cannot lose the validation output
+            if agent.run_name=='valid_best':
+                run_stress_test(agent, calibration_object, simulated)

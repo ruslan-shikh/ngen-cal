@@ -179,6 +179,10 @@ class Evaluatable(ABC):
         """
         pass
 
+    def output_in(self, directory: 'Path') -> 'DataFrame':
+        """Read the output of a run made in directory."""
+        raise NotImplementedError("storm forcings need the uniform strategy")
+
     @property
     @abstractmethod
     def observed(self) -> 'DataFrame':
@@ -262,8 +266,18 @@ class Evaluatable(ABC):
 
     @property
     def flood_weight(self):
-        """Weight of the mean flood peak error in the kge_flood objective"""
+        """Weight of the mean flood peak error in the kge_flood and kge_flood_robust objectives"""
         return self.eval_params.flood_weight
+
+    @property
+    def storm_forcings(self):
+        """Forcing files with changed storms, run alongside every iteration for kge_flood_robust"""
+        return self.eval_params.storm_forcings
+
+    @property
+    def stress_test(self):
+        """Optional CSV of forcing files with changed storms, to rerun the best parameters under"""
+        return self.eval_params.stress_test
 
     @property
     def user(self) -> str:
