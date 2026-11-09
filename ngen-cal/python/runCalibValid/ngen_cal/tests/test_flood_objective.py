@@ -90,3 +90,22 @@ def test_calc_metrics_takes_the_engines_one_column_output_frame(tmp_path):
     params = {"floods": flood_list(tmp_path, (500, 21.0)), "flood_weight": 0.5}
     m = _calc_metrics(sim, obs, objective_params=params)
     assert m["FLOOD_MEAN_PEAK_ERR"] == pytest.approx(10 / 21)
+
+
+def test_peak_bias_is_signed_and_joins_kge_as_a_fourth_term():
+    assert mf.flood_peak_bias(np.array([0.5, 2.0])) == pytest.approx(1.0)   # the errors cancel
+    assert mf.flood_peak_bias(np.array([0.5, 0.5])) == pytest.approx(0.5)
+    assert mf.kge_peak_bias(0.8, np.array([0.5, 2.0])) == pytest.approx(0.8)
+    assert mf.kge_peak_bias(0.8, np.array([0.5, 0.5])) == pytest.approx(1 - np.sqrt(0.2**2 + 0.5**2))
+
+
+def test_calc_metrics_scores_the_peak_bias_objective(tmp_path):
+    obs = hydrograph(500, 21.0, "obs_flow")
+    sim = hydrograph(503, 11.0, "sim_flow")
+    params = {"floods": flood_list(tmp_path, (500, 21.0)), "flood_weight": 0.5}
+    m = _calc_metrics(sim, obs, objective_params=params)
+    assert m["FLOOD_PEAK_BIAS"] == pytest.approx(11 / 21)
+    assert m["KGE_PEAK_BIAS"] == pytest.approx(1 - np.sqrt((1 - m["KGE"])**2 + (11 / 21 - 1)**2))
+    quiet = _calc_metrics(sim, obs, (HOURS[1000], HOURS[1999]), objective_params=params)
+    assert np.isnan(quiet["KGE_PEAK_BIAS"]) and np.isnan(quiet["FLOOD_PEAK_BIAS"])
+

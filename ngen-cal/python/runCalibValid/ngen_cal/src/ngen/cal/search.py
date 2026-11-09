@@ -24,7 +24,8 @@ import logging
 
 from .gwo_global_best import GlobalBestGWO
 from .metric_functions import (treat_values, calculate_all_metrics, read_floods, KGE,
-                               flood_peak_ratios, kge_flood_mean, kge_flood_max)
+                               flood_peak_ratios, kge_flood_mean, kge_flood_max,
+                               flood_peak_bias, kge_peak_bias)
 from .plot_output import plot_calib_output, plot_cost_func
 from .utils import pushd, complete_msg, LiveLogPanel
 
@@ -155,8 +156,10 @@ def _calc_metrics(
     objective_params : The flood objectives' flood list (a CSV of peak_time and obs_peak_cms) under
         'floods' and the weight of the peak error under 'flood_weight'; with a list, the metrics
         gain FLOOD_MEAN_PEAK_ERR, FLOOD_MAX_PEAK_ERR, KGE_FLOOD_MEAN and KGE_FLOOD_MAX over the
-        listed floods that peak in eval_range, and FLOOD_MEAN_LOG_ERR and KGE_FLOOD_LOG_MEAN, which
-        score each flood by |ln(Q̂ / Q)| and so read a halved and a doubled peak alike. With
+        listed floods that peak in eval_range, FLOOD_MEAN_LOG_ERR and KGE_FLOOD_LOG_MEAN, which
+        score each flood by |ln(Q̂ / Q)| and so read a halved and a doubled peak alike, and
+        FLOOD_PEAK_BIAS, the geometric mean of the floods' Q̂ / Q, with KGE_PEAK_BIAS, KGE
+        with that bias as a fourth term. With
         changed forcings under 'storm_forcings' they also gain the storm scores
     storm_hydrographs : The simulation under each changed forcing. With them the storm scores
         read the unchanged run and these together: the floods' log errors averaged over the runs
@@ -196,7 +199,8 @@ def _calc_metrics(
                             & (floods['peak_time'] <= eval_range[1])]
         metrics.update({'FLOOD_MEAN_PEAK_ERR': nan, 'FLOOD_MAX_PEAK_ERR': nan,
                         'KGE_FLOOD_MEAN': nan, 'KGE_FLOOD_MAX': nan,
-                        'FLOOD_MEAN_LOG_ERR': nan, 'KGE_FLOOD_LOG_MEAN': nan})
+                        'FLOOD_MEAN_LOG_ERR': nan, 'KGE_FLOOD_LOG_MEAN': nan,
+                        'FLOOD_PEAK_BIAS': nan, 'KGE_PEAK_BIAS': nan})
         if storms:
             metrics.update({'FLOOD_STORM_LOG_ERR': nan, 'KGE_FLOOD_STORM_MEAN': nan,
                             'FLOOD_STORM_WORST_LOG_ERR': nan, 'KGE_FLOOD_STORM_WORST': nan})
@@ -212,7 +216,9 @@ def _calc_metrics(
                             'KGE_FLOOD_MEAN': kge_flood_mean(metrics['KGE'], errors, weight),
                             'KGE_FLOOD_MAX': kge_flood_max(metrics['KGE'], errors, weight),
                             'FLOOD_MEAN_LOG_ERR': float(np.mean(log_errors)),
-                            'KGE_FLOOD_LOG_MEAN': kge_flood_mean(metrics['KGE'], log_errors, weight)})
+                            'KGE_FLOOD_LOG_MEAN': kge_flood_mean(metrics['KGE'], log_errors, weight),
+                            'FLOOD_PEAK_BIAS': flood_peak_bias(ratios),
+                            'KGE_PEAK_BIAS': kge_peak_bias(metrics['KGE'], ratios)})
             if storms and storm_hydrographs:
                 # one row of log errors per run, one column per flood
                 runs = np.array([log_errors] + [

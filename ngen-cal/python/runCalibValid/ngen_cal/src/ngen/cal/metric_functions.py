@@ -31,6 +31,8 @@ __all__ = ['treat_values',
            'flood_peak_errors',
            'kge_flood_mean',
            'kge_flood_max',
+           'flood_peak_bias',
+           'kge_peak_bias',
           ]
 
 
@@ -564,3 +566,16 @@ def kge_flood_mean(kge: float, errors: np.ndarray, weight: float) -> float:
 def kge_flood_max(kge: float, errors: np.ndarray, weight: float) -> float:
     """1 − [(1 − w)(1 − KGE) + w·largest peak error], a min–max over the listed floods."""
     return 1.0 - ((1.0 - weight) * (1.0 - kge) + weight * float(np.max(errors)))
+
+
+def flood_peak_bias(ratios: np.ndarray) -> float:
+    """π, the geometric mean of the listed floods' Q̂ / Q: below 1 where the peaks are low on the
+    whole, and 1 where a halved peak is matched by a doubled one."""
+    return float(np.exp(np.mean(np.log(ratios))))
+
+
+def kge_peak_bias(kge: float, ratios: np.ndarray) -> float:
+    """KGE with the floods' peak bias as a fourth term, 1 − √[(1 − KGE)² + (π − 1)²]. (1 − KGE)² is
+    the sum of KGE's three squared terms, so π (``flood_peak_bias``) joins r, α and β at their
+    weight."""
+    return 1.0 - float(np.sqrt((1.0 - kge) ** 2 + (flood_peak_bias(ratios) - 1.0) ** 2))
